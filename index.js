@@ -173,12 +173,16 @@ function applyPresence(track, now, durationMs, imageHash, spotifyId) {
   const presence = {
     activities: [
       {
-        name: `${track.title} — ${track.artist}`,
-        type: 1, // STREAMING (banner viola)
-        url:  'https://www.twitch.tv/qualcosa',
+        name:   `${track.title} — ${track.artist}`,
+        type:   1, // STREAMING (pallino viola)
+        url:    'https://www.twitch.tv/qualcosa',
+        assets: {
+          large_image: imageHash ? `spotify:${imageHash}` : 'spotify',
+          large_text:  track.album,
+        },
       },
       {
-        name:    track.title,
+        name:    'Spotify',
         type:    2, // LISTENING
         details: track.title,
         state:   track.artist,
