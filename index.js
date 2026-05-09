@@ -68,7 +68,7 @@ async function getTrackInfo(title, artist) {
       durationMs: track.duration_ms,
     };
   } catch (e) {
-    console.error('Spotify API error:', e);
+    console.error('Spotify API error:', e.message);
     return null;
   }
 }
@@ -81,41 +81,54 @@ function shuffle(arr) {
   return arr;
 }
 
+function applyPresence(track, now, duration, imageHash, spotifyId) {
+  const presence = {
+    activities: [
+      // Streaming status (banner viola)
+      {
+        name: `${track.title} — ${track.artist}`,
+        type: 1, // STREAMING
+        url: 'https://www.twitch.tv/qualcosa',
+      },
+      // Listening status (con cover e barra)
+      {
+        name: track.title,
+        type: 2, // LISTENING
+        details: track.title,
+        state: track.artist,
+        assets: {
+          large_image: imageHash ? `spotify:${imageHash}` : 'spotify',
+          large_text: track.album,
+          small_image: 'spotify',
+          small_text: 'Spotify',
+        },
+        timestamps: {
+          start: now,
+          end: now + duration,
+        },
+        sync_id: spotifyId || track.title,
+        flags: 48,
+      },
+    ],
+  };
+  lastPresence = presence;
+  client.user.setPresence(presence);
+}
+
 async function updateTrack() {
   const track = playlist[currentIndex];
   const now = Date.now();
   const info = await getTrackInfo(track.title, track.artist);
   const duration = info?.durationMs || track.duration;
-  const imageHash = info?.albumImageHash;
 
-  lastPresence = {
-    activities: [{
-      name: 'Spotify',
-      type: 2,
-      details: track.title,
-      state: track.artist,
-      assets: {
-        large_image: imageHash ? `spotify:${imageHash}` : 'spotify',
-        large_text: track.album,
-        small_image: 'spotify',
-        small_text: 'Spotify',
-      },
-      timestamps: {
-        start: now,
-        end: now + duration,
-      },
-      sync_id: info?.spotifyId || track.title,
-      flags: 48,
-    }],
-  };
+  applyPresence(track, now, duration, info?.albumImageHash, info?.spotifyId);
+  console.log(`🎵 Now: ${track.title} — ${track.artist} ${info?.albumImageHash ? '🖼️' : '(no cover)'}`);
 
-  client.user.setPresence(lastPresence);
-  console.log(`🎵 Now: ${track.title} — ${track.artist} ${imageHash ? '🖼️' : '(no cover)'}`);
   currentIndex = (currentIndex + 1) % playlist.length;
   setTimeout(updateTrack, duration + Math.floor(Math.random() * 5000));
 }
 
-// Keepalive ogni 4 minuti per evitare che lo status sparisca
+// Keepalive ogni 4 minuti
 setInterval(() => {
   if (lastPresence && client.user) {
     client.user.setPresence(lastPresence);
@@ -123,7 +136,7 @@ setInterval(() => {
   }
 }, 4 * 60 * 1000);
 
-client.on('shardDisconnect', async () => {
+client.on('shardDisconnect', () => {
   console.log('⚠️ Disconnesso, riconnessione...');
   setTimeout(() => client.login(process.env.TOKEN), 5000);
 });
