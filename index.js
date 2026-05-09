@@ -10,20 +10,20 @@ const client = new Client();
 // ─────────────────────────────────────────────────────────────────
 const ALBUM_COVERS = {
   // FKA twigs
-  'MAGDALENE':   'ab67616d0000b273c5649add07ed3720b1d5aff1',
-  'LP1':         'ab67616d0000b273cdb2c5e9e28e4f89a4ebee54',
-  'M3LL155X':    'ab67616d0000b273c1a14b8b01e5bfd32e5f39e1',
+  'MAGDALENE':   'ab67616d0000b27386011cee37f1842374d971aa',
+  'LP1':         'ab67616d0000b27377a39a4e1d5d0f24dac1130a',
+  'M3LL155X':    'ab67616d0000b273c3b888be56c44954fd90fb7c',
   // Nicole Dollanganger
-  'Natural Born Losers': 'ab67616d0000b2730c24c8749b5ff42e9cf26a66',
-  'Ode to Dawn':         'ab67616d0000b273f1f5a9012f94aba25a4c6a3a',
+  'Natural Born Losers': 'ab67616d0000b2738de0ce301b555425678f0716',
+  'Ode to Dawn':         'ab67616d0000b27379de087d90c28d52aa5b5202',
   // Snowstrippers
-  'Forever': 'ab67616d0000b273b0c9a1a6f2b456e71398e3a0',
-  'Closer':  'ab67616d0000b273e8f4eb11e3426ee3edcc3099',
+  'Forever': 'ab67616d0000b273a2376c88a3cb0163b33e7856',
+  'Closer':  'ab67616d0000b273bcd4a246ee777dd6207a25e5',
   // Ethel Cain
-  "Preacher's Daughter": 'ab67616d0000b2732c30e2f6da96f48c1addb8e0',
+  "Preacher's Daughter": 'ab67616d0000b273ccd1887cc78b0bd55f54bbe1',
   // shygirl
-  'NYMPH':  'ab67616d0000b273f39ae5ee5d32e78a4d0df2d7',
-  'Alias':  'ab67616d0000b273c0f63fa03e2fc9b67a08e89c',
+  'NYMPH':  'ab67616d0000b273955f921014ed4cfca00a56a1',
+  'Alias':  'ab67616d0000b273eb21af039f00adb6e3c2f356',
 };
 
 // ─────────────────────────────────────────────────────────────────
