@@ -1,6 +1,9 @@
 const { Client } = require('discord.js-selfbot-v13');
 const client = new Client();
 
+const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
+const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
+
 const playlist = [
   { title: 'cellophane', artist: 'FKA twigs', album: 'MAGDALENE', duration: 245000 },
   { title: 'Coma Baby', artist: 'Nicole Dollanganger', album: 'Natural Born Losers', duration: 214000 },
@@ -28,6 +31,48 @@ const playlist = [
   { title: 'Come For Me', artist: 'shygirl', album: 'NYMPH', duration: 178000 },
 ];
 
+let spotifyToken = null;
+let tokenExpiry = 0;
+let lastPresence = null;
+let currentIndex = 0;
+
+async function getSpotifyToken() {
+  if (spotifyToken && Date.now() < tokenExpiry) return spotifyToken;
+  const res = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Authorization': 'Basic ' + Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64'),
+    },
+    body: 'grant_type=client_credentials',
+  });
+  const data = await res.json();
+  spotifyToken = data.access_token;
+  tokenExpiry = Date.now() + (data.expires_in - 60) * 1000;
+  return spotifyToken;
+}
+
+async function getTrackInfo(title, artist) {
+  try {
+    const token = await getSpotifyToken();
+    const query = encodeURIComponent(`track:${title} artist:${artist}`);
+    const res = await fetch(`https://api.spotify.com/v1/search?q=${query}&type=track&limit=1`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    const data = await res.json();
+    const track = data.tracks?.items?.[0];
+    if (!track) return null;
+    return {
+      spotifyId: track.id,
+      albumImageHash: track.album.images?.[0]?.url?.split('/image/')?.[1] || null,
+      durationMs: track.duration_ms,
+    };
+  } catch (e) {
+    console.error('Spotify API error:', e);
+    return null;
+  }
+}
+
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -36,34 +81,57 @@ function shuffle(arr) {
   return arr;
 }
 
-let currentIndex = 0;
-
-function updateTrack() {
+async function updateTrack() {
   const track = playlist[currentIndex];
   const now = Date.now();
+  const info = await getTrackInfo(track.title, track.artist);
+  const duration = info?.durationMs || track.duration;
+  const imageHash = info?.albumImageHash;
 
-  client.user.setActivity(track.title, {
-    type: 'LISTENING',
-    details: track.title,
-    state: track.artist,
-    assets: {
-      largeText: track.album,
-    },
-    timestamps: {
-      start: now,
-      end: now + track.duration,
-    },
-  });
+  lastPresence = {
+    activities: [{
+      name: 'Spotify',
+      type: 2,
+      details: track.title,
+      state: track.artist,
+      assets: {
+        large_image: imageHash ? `spotify:${imageHash}` : 'spotify',
+        large_text: track.album,
+        small_image: 'spotify',
+        small_text: 'Spotify',
+      },
+      timestamps: {
+        start: now,
+        end: now + duration,
+      },
+      sync_id: info?.spotifyId || track.title,
+      flags: 48,
+    }],
+  };
 
-  console.log(`🎵 Now: ${track.title} — ${track.artist}`);
+  client.user.setPresence(lastPresence);
+  console.log(`🎵 Now: ${track.title} — ${track.artist} ${imageHash ? '🖼️' : '(no cover)'}`);
   currentIndex = (currentIndex + 1) % playlist.length;
-  setTimeout(updateTrack, track.duration + Math.floor(Math.random() * 5000));
+  setTimeout(updateTrack, duration + Math.floor(Math.random() * 5000));
 }
+
+// Keepalive ogni 4 minuti per evitare che lo status sparisca
+setInterval(() => {
+  if (lastPresence && client.user) {
+    client.user.setPresence(lastPresence);
+    console.log('🔄 Status refreshato');
+  }
+}, 4 * 60 * 1000);
+
+client.on('shardDisconnect', async () => {
+  console.log('⚠️ Disconnesso, riconnessione...');
+  setTimeout(() => client.login(process.env.TOKEN), 5000);
+});
 
 client.on('ready', async () => {
   console.log(`✅ Loggato come ${client.user.tag}`);
   shuffle(playlist);
-  updateTrack();
+  await updateTrack();
 });
 
 process.on('unhandledRejection', (err) => {
