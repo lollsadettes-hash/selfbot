@@ -1,5 +1,4 @@
-const { Client } = require('discord.js-selfbot-v13');
-const axios = require('axios');
+const { Client, MessageEmbed, MessageActionRow, MessageButton } = require('discord.js-selfbot-v13');
 const Groq = require('groq-sdk');
 const config = require('./config');
 
@@ -9,7 +8,7 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const userStates = {};
 const userPaymentMethod = {};
 
-// ── AI FALLBACK (only for weird/natural language input) ───────────────────────
+// ── AI FALLBACK ───────────────────────────────────────────────────────────────
 async function groqFallback(userMessage, context) {
   const prompt = `Discord shop bot. Context: ${context}
 User wrote: "${userMessage}"
@@ -26,23 +25,76 @@ If nothing matches, reply "unknown".`;
   return response.choices[0]?.message?.content?.trim().toLowerCase() || 'unknown';
 }
 
-// ── WEBHOOK SENDER ────────────────────────────────────────────────────────────
-async function sendProofWebhook(user, imageUrl, paymentMethod) {
-  await axios.post(process.env.REVIEW_WEBHOOK_URL, {
-    content: `React ✅ to **approve** (send invite + role) | React ❌ to **decline**`,
-    embeds: [
-      {
-        title: '📥 New Payment Proof',
-        color: 0xf5a623,
-        fields: [
-          { name: 'User', value: `${user.tag} (${user.id})`, inline: true },
-          { name: 'Payment Method', value: paymentMethod, inline: true },
-        ],
-        image: { url: imageUrl },
-      },
-    ],
+// ── SEND PROOF MESSAGE WITH BUTTONS (selfbot → payments channel) ──────────────
+async function sendProofMessage(user, imageUrl, paymentMethod) {
+  const channel = await client.channels.fetch('1504604985663553586');
+
+  const embed = new MessageEmbed()
+    .setTitle('🩷 payment proof received !')
+    .setDescription(`**${user.tag}** is waiting for approval ~`)
+    .setColor(0xff9ec4)
+    .addField('👤 user', `${user.tag}\n\`${user.id}\``, true)
+    .addField('💳 method', paymentMethod, true)
+    .setImage(imageUrl)
+    .setFooter({ text: '💌 review carefully before approving !' })
+    .setTimestamp();
+
+  const row = new MessageActionRow().addComponents(
+    new MessageButton()
+      .setCustomId(`approve_${user.id}`)
+      .setLabel('✅ Approve')
+      .setStyle('SUCCESS'),
+    new MessageButton()
+      .setCustomId(`decline_${user.id}`)
+      .setLabel('❌ Decline')
+      .setStyle('DANGER'),
+  );
+
+  await channel.send({
+    content: '✨ **new payment incoming!!** ✨',
+    embeds: [embed],
+    components: [row],
   });
 }
+
+// ── BUTTON INTERACTION HANDLER ────────────────────────────────────────────────
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  const [action, targetId] = interaction.customId.split('_');
+
+  try {
+    const targetUser = await client.users.fetch(targetId);
+
+    if (action === 'approve') {
+      await targetUser.send(`${config.MESSAGE_APPROVED} ${process.env.VAULT_INVITE}`);
+      try {
+        const guild = await client.guilds.fetch(process.env.GUILD_ID);
+        const member = await guild.members.fetch(targetId);
+        await member.roles.add(process.env.ROLE_ID);
+      } catch (e) {
+        console.error('Could not assign role:', e);
+      }
+      userStates[targetId] = 'approved';
+      delete userPaymentMethod[targetId];
+      await interaction.update({
+        content: `✅ **approved** — invite sent + role given to **${targetUser.tag}**!`,
+        components: [],
+      });
+
+    } else if (action === 'decline') {
+      await targetUser.send(config.MESSAGE_DECLINED);
+      userStates[targetId] = 'start';
+      delete userPaymentMethod[targetId];
+      await interaction.update({
+        content: `❌ **declined** — **${targetUser.tag}** has been notified.`,
+        components: [],
+      });
+    }
+  } catch (e) {
+    console.error('Interaction error:', e);
+  }
+});
 
 // ── MAIN MESSAGE HANDLER ──────────────────────────────────────────────────────
 client.on('messageCreate', async (message) => {
@@ -55,15 +107,12 @@ client.on('messageCreate', async (message) => {
   const state = userStates[userId] || 'start';
 
   try {
-
-    // ── START ──────────────────────────────────────────────
     if (state === 'start') {
       await message.channel.send(config.MESSAGE_WELCOME);
       userStates[userId] = 'main_menu';
       return;
     }
 
-    // ── MAIN MENU → 1 = buy, 2 = info ─────────────────────
     if (state === 'main_menu') {
       let intent = null;
       if (msg === '1') intent = 'buy';
@@ -75,14 +124,12 @@ client.on('messageCreate', async (message) => {
         userStates[userId] = 'payment_menu';
       } else if (intent === 'info') {
         await message.channel.send(config.MESSAGE_OPTION_2);
-        // stays on main_menu, user sends 1 to continue
       } else {
         await message.channel.send(config.MESSAGE_WELCOME);
       }
       return;
     }
 
-    // ── PAYMENT MENU → 1 = PayPal, 2 = Crypto, 3 = Robux ──
     if (state === 'payment_menu') {
       let intent = null;
       if (msg === '1') intent = 'paypal';
@@ -112,7 +159,6 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // ── WAITING DONE → "finished transaction" or switch method
     if (state === 'waiting_done') {
       const currentMethod = userPaymentMethod[userId];
       let intent = null;
@@ -147,12 +193,11 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // ── WAITING PROOF ──────────────────────────────────────
     if (state === 'waiting_proof') {
       if (message.attachments.size > 0) {
         const imageUrl = message.attachments.first().url;
         const method = userPaymentMethod[userId] || 'Unknown';
-        await sendProofWebhook(message.author, imageUrl, method);
+        await sendProofMessage(message.author, imageUrl, method);
         await message.channel.send(config.MESSAGE_PROOF);
         userStates[userId] = 'pending_approval';
       } else {
@@ -161,47 +206,12 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // ── PENDING APPROVAL ───────────────────────────────────
     if (state === 'pending_approval') {
       await message.channel.send('⏳ Your proof is still under review. Please wait!');
     }
 
   } catch (err) {
     console.error('Error handling message:', err);
-  }
-});
-
-// ── WEBHOOK REACTION HANDLER ──────────────────────────────────────────────────
-client.on('messageReactionAdd', async (reaction, user) => {
-  if (user.id === client.user.id) return;
-
-  const embed = reaction.message.embeds[0];
-  if (!embed) return;
-
-  const userField = embed.fields?.find(f => f.name === 'User');
-  if (!userField) return;
-
-  const targetUserId = userField.value.match(/\((\d+)\)/)?.[1];
-  if (!targetUserId) return;
-
-  const targetUser = await client.users.fetch(targetUserId);
-  if (!targetUser) return;
-
-  if (reaction.emoji.name === '✅') {
-    await targetUser.send(`${config.MESSAGE_APPROVED} ${process.env.VAULT_INVITE}`);
-    try {
-      const guild = await client.guilds.fetch(process.env.GUILD_ID);
-      const member = await guild.members.fetch(targetUserId);
-      await member.roles.add(process.env.ROLE_ID);
-    } catch (e) {
-      console.error('Could not assign role:', e);
-    }
-    userStates[targetUserId] = 'approved';
-    delete userPaymentMethod[targetUserId];
-  } else if (reaction.emoji.name === '❌') {
-    await targetUser.send(config.MESSAGE_DECLINED);
-    userStates[targetUserId] = 'start';
-    delete userPaymentMethod[targetUserId];
   }
 });
 
