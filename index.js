@@ -1,4 +1,4 @@
-const { Client, MessageEmbed, MessageActionRow, MessageButton } = require('discord.js-selfbot-v13');
+const { Client } = require('discord.js-selfbot-v13');
 const Groq = require('groq-sdk');
 const config = require('./config');
 
@@ -7,6 +7,9 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const userStates = {};
 const userPaymentMethod = {};
+
+// messageId → userId  (per sapere quale utente approvare/rifiutare)
+const pendingApprovals = {};
 
 // ── AI FALLBACK ───────────────────────────────────────────────────────────────
 async function groqFallback(userMessage, context) {
@@ -25,38 +28,47 @@ If nothing matches, reply "unknown".`;
   return response.choices[0]?.message?.content?.trim().toLowerCase() || 'unknown';
 }
 
-// ── SEND PROOF MESSAGE WITH BUTTONS (selfbot → payments channel) ──────────────
+// ── SEND PROOF MESSAGE CON REACTION (selfbot → payments channel) ──────────────
 async function sendProofMessage(user, imageUrl, paymentMethod) {
   const channel = await client.channels.fetch('1504604985663553586');
 
-  const row = new MessageActionRow().addComponents(
-    new MessageButton()
-      .setCustomId(`approve_${user.id}`)
-      .setLabel('✅ Approve')
-      .setStyle('SUCCESS'),
-    new MessageButton()
-      .setCustomId(`decline_${user.id}`)
-      .setLabel('❌ Decline')
-      .setStyle('DANGER'),
+  const msg = await channel.send(
+    `✨ **new payment incoming!!** ✨\n` +
+    `🩷 **payment proof received !**\n` +
+    `👤 **user:** ${user.tag} \`${user.id}\`\n` +
+    `💳 **method:** ${paymentMethod}\n` +
+    `${imageUrl}\n\n` +
+    `> Reagisci con ✅ per approvare o ❌ per rifiutare`
   );
 
-  await channel.send({
-    content: `✨ **new payment incoming!!** ✨\n🩷 **payment proof received !**\n👤 **user:** ${user.tag} \`${user.id}\`\n💳 **method:** ${paymentMethod}\n${imageUrl}`,
-    components: [row],
-  });
+  // Il selfbot aggiunge le reaction al messaggio
+  await msg.react('✅');
+  await msg.react('❌');
+
+  // Salva il mapping messageId → userId
+  pendingApprovals[msg.id] = user.id;
 }
 
-// ── BUTTON INTERACTION HANDLER ────────────────────────────────────────────────
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton()) return;
+// ── REACTION HANDLER ──────────────────────────────────────────────────────────
+client.on('messageReactionAdd', async (reaction, user) => {
+  // Ignora le reaction del selfbot stesso
+  if (user.id === client.user.id) return;
 
-  const [action, targetId] = interaction.customId.split('_');
+  // Controlla se è un messaggio di pagamento pendente
+  const targetId = pendingApprovals[reaction.message.id];
+  if (!targetId) return;
+
+  const emoji = reaction.emoji.name;
+
+  if (emoji !== '✅' && emoji !== '❌') return;
 
   try {
     const targetUser = await client.users.fetch(targetId);
 
-    if (action === 'approve') {
+    if (emoji === '✅') {
+      // ── APPROVE ──
       await targetUser.send(`${config.MESSAGE_APPROVED} ${process.env.VAULT_INVITE}`);
+
       try {
         const guild = await client.guilds.fetch(process.env.GUILD_ID);
         const member = await guild.members.fetch(targetId);
@@ -64,24 +76,34 @@ client.on('interactionCreate', async (interaction) => {
       } catch (e) {
         console.error('Could not assign role:', e);
       }
+
       userStates[targetId] = 'approved';
       delete userPaymentMethod[targetId];
-      await interaction.update({
-        content: `✅ **approved** — invite sent + role given to **${targetUser.tag}**!`,
-        components: [],
-      });
+      delete pendingApprovals[reaction.message.id];
 
-    } else if (action === 'decline') {
+      await reaction.message.edit(
+        reaction.message.content.split('\n> ')[0] +
+        `\n\n✅ **APPROVED** — invite inviato + ruolo assegnato a **${targetUser.tag}**!`
+      );
+      // Rimuove tutte le reaction
+      await reaction.message.reactions.removeAll().catch(() => {});
+
+    } else if (emoji === '❌') {
+      // ── DECLINE ──
       await targetUser.send(config.MESSAGE_DECLINED);
+
       userStates[targetId] = 'start';
       delete userPaymentMethod[targetId];
-      await interaction.update({
-        content: `❌ **declined** — **${targetUser.tag}** has been notified.`,
-        components: [],
-      });
+      delete pendingApprovals[reaction.message.id];
+
+      await reaction.message.edit(
+        reaction.message.content.split('\n> ')[0] +
+        `\n\n❌ **DECLINED** — **${targetUser.tag}** è stato notificato.`
+      );
+      await reaction.message.reactions.removeAll().catch(() => {});
     }
   } catch (e) {
-    console.error('Interaction error:', e);
+    console.error('Reaction handler error:', e);
   }
 });
 
