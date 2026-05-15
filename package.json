@@ -5,6 +5,9 @@
   "scripts": {
     "start": "node index.js"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "discord.js-selfbot-v13": "^3.3.1",
     "groq-sdk": "^0.3.3",
