@@ -8,7 +8,7 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const userStates = {};
 const userPaymentMethod = {};
 
-// messageId → userId  (per sapere quale utente approvare/rifiutare)
+// messageId → userId  (to know which user to approve/decline)
 const pendingApprovals = {};
 
 // ── AI FALLBACK ───────────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ If nothing matches, reply "unknown".`;
   return response.choices[0]?.message?.content?.trim().toLowerCase() || 'unknown';
 }
 
-// ── SEND PROOF MESSAGE CON REACTION (selfbot → payments channel) ──────────────
+// ── SEND PROOF MESSAGE WITH REACTIONS (selfbot → payments channel) ────────────
 async function sendProofMessage(user, imageUrl, paymentMethod) {
   const channel = await client.channels.fetch('1504604985663553586');
 
@@ -38,28 +38,27 @@ async function sendProofMessage(user, imageUrl, paymentMethod) {
     `👤 **user:** ${user.tag} \`${user.id}\`\n` +
     `💳 **method:** ${paymentMethod}\n` +
     `${imageUrl}\n\n` +
-    `> Reagisci con ✅ per approvare o ❌ per rifiutare`
+    `> React with ✅ to approve or ❌ to decline`
   );
 
-  // Il selfbot aggiunge le reaction al messaggio
+  // Selfbot adds reactions to the message
   await msg.react('✅');
   await msg.react('❌');
 
-  // Salva il mapping messageId → userId
+  // Store the mapping messageId → userId
   pendingApprovals[msg.id] = user.id;
 }
 
 // ── REACTION HANDLER ──────────────────────────────────────────────────────────
 client.on('messageReactionAdd', async (reaction, user) => {
-  // Ignora le reaction del selfbot stesso
+  // Ignore reactions from the selfbot itself
   if (user.id === client.user.id) return;
 
-  // Controlla se è un messaggio di pagamento pendente
+  // Check if this is a pending payment message
   const targetId = pendingApprovals[reaction.message.id];
   if (!targetId) return;
 
   const emoji = reaction.emoji.name;
-
   if (emoji !== '✅' && emoji !== '❌') return;
 
   try {
@@ -83,9 +82,8 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
       await reaction.message.edit(
         reaction.message.content.split('\n> ')[0] +
-        `\n\n✅ **APPROVED** — invite inviato + ruolo assegnato a **${targetUser.tag}**!`
+        `\n\n✅ **APPROVED** — invite sent + role assigned to **${targetUser.tag}**!`
       );
-      // Rimuove tutte le reaction
       await reaction.message.reactions.removeAll().catch(() => {});
 
     } else if (emoji === '❌') {
@@ -98,7 +96,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
       await reaction.message.edit(
         reaction.message.content.split('\n> ')[0] +
-        `\n\n❌ **DECLINED** — **${targetUser.tag}** è stato notificato.`
+        `\n\n❌ **DECLINED** — **${targetUser.tag}** has been notified.`
       );
       await reaction.message.reactions.removeAll().catch(() => {});
     }
