@@ -7,7 +7,7 @@ const client = new Client({ checkUpdate: false });
 
 
 // ==========================================
-// CONFIGURAZIONE VARIABILI (RAILWAY)
+// VARIABILI D'AMBIENTE (RAILWAY)
 // ==========================================
 const TOKEN = process.env.DISCORD_TOKEN;
 const WEBHOOK_URL = process.env.REVIEW_WEBHOOK_URL;
@@ -20,7 +20,7 @@ const ALLOWED_USERS = process.env.ALLOWED_USERS
 
 
 // ==========================================
-// STATI E MESSAGGI (FIXED REFERENCE ERRORS)
+// STATI E CONFIGURAZIONI (FIX LOGS)
 // ==========================================
 const STATES = Object.freeze({
     INITIAL: 'INITIAL',
@@ -32,23 +32,20 @@ const STATES = Object.freeze({
 
 const userStates = new Map();
 
-// Helper per i messaggi (Fix per le funzioni mancanti nei log)
-const msgInitial = () => "👋 **Benvenuto nel sistema OF (Roblox)**\n\n1️⃣ **Buy Access**\n2️⃣ **Info Creators/Video**\n\n*Rispondi con il numero.*";
-const msgPaymentMethods = () => "💳 **Seleziona il metodo di pagamento**:\n1. PayPal\n2. Crypto (LTC)\n3. Robux";
-const msgVideoInfo = () => "🎥 **Anteprima Video**: [LINK_VIDEO]\n\nPremi **1** per andare al pagamento o **!reset**.";
-
 const SUB_INFO = {
-    1: "📧 **PayPal**: `lollsadettes02@gmail.com` (Friends & Family)\n⚠️ No note nel pagamento.",
-    2: "🪙 **LTC**: `LfXyPCq5zEEtTLTCnKiZoHiRyyq2qT5Z3Z`",
+    1: "📧 **PayPal**: `lollsadettes02@gmail.com` (Amici e Familiari)\n⚠️ **IMPORTANTE**: Nessuna nota nel pagamento.",
+    2: "🪙 **LTC (Crypto)**: `LfXyPCq5zEEtTLTCnKiZoHiRyyq2qT5Z3Z`",
     3: "🎮 **Robux**: [Link Gamepass](https://www.roblox.com/catalog/15331422342/0F-4CCESS)"
 };
 
 
 
 // ==========================================
-// LOGICA AI E WEBHOOK
+// FUNZIONI MANCANTI NEI LOG (FIX REFERENCEERROR)
 // ==========================================
-async function getGroqResponse(userInput) {
+const sendInitialMenu = (channel) => channel.send("👋 **Benvenuto nel sistema OF (Roblox)**\n\n1️⃣ **Buy Access**\n2️⃣ **Info Creators/Video**\n\n*Rispondi con 1 o 2.*");
+
+async function getGroqAI(userInput) {
     if (!GROQ_API_KEY) return null;
     try {
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -67,18 +64,20 @@ async function getGroqResponse(userInput) {
 
 
 // ==========================================
-// GESTORE EVENTI
+// LOGICA ACCOUNT UTENTE (SELF-ACTION)
 // ==========================================
 client.on('ready', () => {
-    console.log(`✅ [SYSTEM] Selfbot Online: ${client.user.tag}`);
+    console.log(`✅ Selfbot loggato su account: ${client.user.tag}`);
 });
 
 
 
 client.on('messageCreate', async (message) => {
     
-    // Filtri sicurezza
+    // Whitelist (se impostata)
     if (ALLOWED_USERS && !ALLOWED_USERS.has(message.author.id)) return;
+    
+    // Il selfbot reagisce SOLO ai messaggi mandati da TE (o dal tuo account)
     if (message.author.id !== client.user.id) return;
 
     const content = message.content.trim();
@@ -87,10 +86,10 @@ client.on('messageCreate', async (message) => {
 
 
 
-    // Comandi Reset
-    if (lowContent === '!reset' || lowContent === '!start') {
+    // Comandi universali di avvio/reset
+    if (lowContent === '!reset' || lowContent === '!start' || lowContent === 'hello') {
         userStates.set(userId, { state: STATES.INITIAL });
-        return message.channel.send(msgInitial());
+        return sendInitialMenu(message.channel);
     }
 
 
@@ -105,12 +104,12 @@ client.on('messageCreate', async (message) => {
             case STATES.INITIAL:
                 if (content === '1') {
                     userStates.set(userId, { state: STATES.AWAITING_PAYMENT_METHOD });
-                    await message.channel.send(msgPaymentMethods());
+                    await message.channel.send("💳 **Seleziona metodo**:\n1. PayPal\n2. Crypto (LTC)\n3. Robux");
                 } else if (content === '2') {
                     userStates.set(userId, { state: STATES.AWAITING_VIDEO_CONFIRM });
-                    await message.channel.send(msgVideoInfo());
+                    await message.channel.send("🎥 **Info**: [LINK_VIDEO]\n\nScrivi **1** per pagare o **!reset**.");
                 } else {
-                    const aiResp = await getGroqResponse(content);
+                    const aiResp = await getGroqAI(content);
                     if (aiResp) await message.channel.send(aiResp);
                 }
                 break;
@@ -120,7 +119,7 @@ client.on('messageCreate', async (message) => {
             case STATES.AWAITING_VIDEO_CONFIRM:
                 if (content === '1') {
                     userStates.set(userId, { state: STATES.AWAITING_PAYMENT_METHOD });
-                    await message.channel.send(msgPaymentMethods());
+                    await message.channel.send("💳 **Metodi**:\n1. PayPal\n2. Crypto\n3. Robux");
                 }
                 break;
 
@@ -139,7 +138,7 @@ client.on('messageCreate', async (message) => {
             case STATES.AWAITING_PAYMENT_CONFIRM:
                 if (lowContent === 'done' || lowContent === 'finished') {
                     if (message.attachments.size > 0) {
-                        const proof = message.attachments.first().url;
+                        const proofUrl = message.attachments.first().url;
                         
                         if (WEBHOOK_URL) {
                             await fetch(WEBHOOK_URL, {
@@ -149,29 +148,25 @@ client.on('messageCreate', async (message) => {
                                     embeds: [{
                                         title: "💰 Nuova Prova Ricevuta",
                                         description: `User: ${userId}\nMetodo: ${current.method}`,
-                                        image: { url: proof },
+                                        image: { url: proofUrl },
                                         color: 0x00ff00
                                     }]
                                 })
                             });
                         }
                         userStates.set(userId, { state: STATES.AWAITING_REVIEW });
-                        await message.channel.send("✅ Inviato allo staff! Attendi controllo.");
+                        await message.channel.send("✅ Inviato allo staff! Attendi 8-14 ore.");
                     } else {
-                        await message.channel.send("❌ Devi allegare lo screenshot!");
+                        await message.channel.send("❌ Allegare screenshot per confermare!");
                     }
                 }
                 break;
-
-
 
             case STATES.AWAITING_REVIEW:
                 if (lowContent === 'status') await message.channel.send("⏳ In revisione...");
                 break;
         }
-    } catch (err) { 
-        console.error('Errore durante l\'esecuzione:', err.message); 
-    }
+    } catch (err) { console.error('Errore esecuzione:', err.message); }
 });
 
 
@@ -179,7 +174,5 @@ client.on('messageCreate', async (message) => {
 process.on('SIGTERM', () => { client.destroy(); process.exit(0); });
 process.on('SIGINT', () => { client.destroy(); process.exit(0); });
 
-
-
-client.login(TOKEN).catch(e => console.error("❌ Errore Token!"));
-                        
+client.login(TOKEN).catch(() => console.error("❌ Errore Token!"));
+                          
