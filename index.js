@@ -2,14 +2,24 @@ const { Client } = require('discord.js-selfbot-v13');
 const Groq = require('groq-sdk');
 const config = require('./config');
 
-const client = new Client();
+// ── FIX #1: Intents espliciti per ricevere i DM ──────────────────────────────
+const client = new Client({
+  checkUpdate: false,
+  readyStatus: false,
+  // selfbot v13 usa ancora i bitmask numerici
+  ws: { properties: { $browser: 'Discord iOS' } },
+});
+
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const userStates = {};
 const userPaymentMethod = {};
-
-// messageId → userId  (to know which user to approve/decline)
 const pendingApprovals = {};
+
+// ── DEBUG HELPER ──────────────────────────────────────────────────────────────
+function log(tag, ...args) {
+  console.log(`[${new Date().toISOString()}] [${tag}]`, ...args);
+}
 
 // ── AI FALLBACK ───────────────────────────────────────────────────────────────
 async function groqFallback(userMessage, context) {
@@ -73,6 +83,8 @@ User message: "${userMessage}"
 
 Reply with ONLY one word from the valid intents list. If nothing matches, reply "unknown".`;
 
+  log('GROQ', `Calling AI — context: ${context} | message: "${userMessage}"`);
+
   const response = await groq.chat.completions.create({
     model: 'llama-3.1-8b-instant',
     messages: [{ role: 'user', content: prompt }],
@@ -80,11 +92,14 @@ Reply with ONLY one word from the valid intents list. If nothing matches, reply 
     temperature: 0,
   });
 
-  return response.choices[0]?.message?.content?.trim().toLowerCase() || 'unknown';
+  const intent = response.choices[0]?.message?.content?.trim().toLowerCase() || 'unknown';
+  log('GROQ', `AI intent → "${intent}"`);
+  return intent;
 }
 
-// ── SEND PROOF MESSAGE WITH REACTIONS (selfbot → payments channel) ────────────
+// ── SEND PROOF MESSAGE WITH REACTIONS ─────────────────────────────────────────
 async function sendProofMessage(user, imageUrl, paymentMethod) {
+  log('PROOF', `Sending proof for ${user.tag} via ${paymentMethod}`);
   const channel = await client.channels.fetch('1504604985663553586');
 
   const msg = await channel.send(
@@ -100,6 +115,7 @@ async function sendProofMessage(user, imageUrl, paymentMethod) {
   await msg.react('❌');
 
   pendingApprovals[msg.id] = user.id;
+  log('PROOF', `Proof message sent — id: ${msg.id}`);
 }
 
 // ── REACTION HANDLER ──────────────────────────────────────────────────────────
@@ -112,11 +128,12 @@ client.on('messageReactionAdd', async (reaction, user) => {
   const emoji = reaction.emoji.name;
   if (emoji !== '✅' && emoji !== '❌') return;
 
+  log('REACTION', `${emoji} from ${user.tag} on message ${reaction.message.id} → targetUser: ${targetId}`);
+
   try {
     const targetUser = await client.users.fetch(targetId);
 
     if (emoji === '✅') {
-      // ── APPROVE ──
       await targetUser.send(`${config.MESSAGE_APPROVED} ${process.env.VAULT_INVITE}`);
 
       try {
@@ -124,9 +141,10 @@ client.on('messageReactionAdd', async (reaction, user) => {
         const member = await guild.members.fetch(targetId).catch(() => null);
         if (member) {
           await member.roles.add(process.env.ROLE_ID);
+          log('ROLE', `Role assigned to ${targetUser.tag}`);
+        } else {
+          log('ROLE', `Member not in guild yet — will assign on join`);
         }
-        // If the member is not in the guild yet, the role will be
-        // assigned automatically when they join (see guildMemberAdd below).
       } catch (e) {
         console.error('Could not assign role:', e);
       }
@@ -142,7 +160,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
       await reaction.message.reactions.removeAll().catch(() => {});
 
     } else if (emoji === '❌') {
-      // ── DECLINE ──
       await targetUser.send(config.MESSAGE_DECLINED);
 
       userStates[targetId] = 'start';
@@ -161,29 +178,54 @@ client.on('messageReactionAdd', async (reaction, user) => {
 });
 
 // ── AUTO-ROLE ON GUILD JOIN ───────────────────────────────────────────────────
-// If a user joins the server and was already approved (e.g. bought via DM
-// before entering the vault), instantly assign their role.
 client.on('guildMemberAdd', async (member) => {
   if (member.guild.id !== process.env.GUILD_ID) return;
   if (userStates[member.id] !== 'approved') return;
 
   try {
     await member.roles.add(process.env.ROLE_ID);
-    console.log(`[guildMemberAdd] Role assigned to ${member.user.tag} (was already approved).`);
+    log('ROLE', `[guildMemberAdd] Role assigned to ${member.user.tag} (pre-approved).`);
   } catch (e) {
     console.error(`[guildMemberAdd] Could not assign role to ${member.user.tag}:`, e);
   }
 });
 
+// ── READY ─────────────────────────────────────────────────────────────────────
+client.on('ready', () => {
+  log('READY', `Logged in as ${client.user.tag} (${client.user.id})`);
+  log('READY', `Listening for DMs...`);
+});
+
+// ── FIX #2: Catch errori di connessione ───────────────────────────────────────
+client.on('error', (err) => {
+  console.error('[WS ERROR]', err);
+});
+
+client.on('warn', (msg) => {
+  console.warn('[WARN]', msg);
+});
+
 // ── MAIN MESSAGE HANDLER ──────────────────────────────────────────────────────
 client.on('messageCreate', async (message) => {
+  // ── FIX #3: Log ogni messaggio ricevuto per verificare che l'evento scatti ──
+  log('MSG', `From: ${message.author.tag} | Channel type: ${message.channel.type} | Content: "${message.content}"`);
+
   if (message.author.id === client.user.id) return;
-  if (message.channel.type !== 'DM') return;
+
+  // ── FIX #4: 'DM' → tipo corretto per selfbot v13 ─────────────────────────
+  // In selfbot v13 il tipo dei canali DM è la stringa 'DM' oppure il numero 1
+  const isDM = message.channel.type === 'DM' || message.channel.type === 1;
+  if (!isDM) {
+    log('MSG', `Ignored — not a DM (type: ${message.channel.type})`);
+    return;
+  }
 
   const userId = message.author.id;
   const raw = message.content.trim();
   const msg = raw.toLowerCase();
   const state = userStates[userId] || 'start';
+
+  log('STATE', `User ${message.author.tag} | state: "${state}" | msg: "${raw}"`);
 
   try {
     if (state === 'start') {
@@ -195,13 +237,13 @@ client.on('messageCreate', async (message) => {
     if (state === 'main_menu') {
       let intent = null;
 
-      // Hard keywords first
       if (msg === '1') intent = 'buy';
       else if (msg === '2') intent = 'info';
-      // Natural-language shortcuts before calling AI
       else if (/\bbuy\b|purchas|order/.test(msg)) intent = 'buy';
       else if (/\binfo\b|information|details|what.*sell|how.*work|tell me more/.test(msg)) intent = 'info';
       else intent = await groqFallback(raw, 'main');
+
+      log('INTENT', `main_menu → "${intent}"`);
 
       if (intent === 'buy') {
         await message.channel.send(config.MESSAGE_PAYMENT_MENU);
@@ -225,6 +267,8 @@ client.on('messageCreate', async (message) => {
       else if (/\brobux\b/.test(msg)) intent = 'robux';
       else if (/\bback\b|\breturn\b|\bmenu\b|\bmain\b/.test(msg)) intent = 'back';
       else intent = await groqFallback(raw, 'payment');
+
+      log('INTENT', `payment_menu → "${intent}"`);
 
       if (intent === 'paypal') {
         await message.channel.send(config.MESSAGE_PAYPAL);
@@ -262,6 +306,8 @@ client.on('messageCreate', async (message) => {
       else if (/\bfinish\b|\bdone\b|\bpaid\b|\bsent\b|\bcomplete\b|\btransaction\b/.test(msg)) intent = 'finished';
       else intent = await groqFallback(raw, `waiting_done (user paid with ${currentMethod})`);
 
+      log('INTENT', `waiting_done → "${intent}"`);
+
       if (intent === 'finished') {
         await message.channel.send(config.MESSAGE_PROOF);
         userStates[userId] = 'waiting_proof';
@@ -278,7 +324,6 @@ client.on('messageCreate', async (message) => {
         await message.channel.send(config.MESSAGE_PAYMENT_MENU);
         userStates[userId] = 'payment_menu';
       } else {
-        // Re-send the current method instructions
         if (currentMethod === 'PayPal') await message.channel.send(config.MESSAGE_PAYPAL);
         else if (currentMethod === 'Crypto') await message.channel.send(config.MESSAGE_CRYPTO);
         else await message.channel.send(config.MESSAGE_ROBUX);
@@ -291,7 +336,8 @@ client.on('messageCreate', async (message) => {
         const imageUrl = message.attachments.first().url;
         const method = userPaymentMethod[userId] || 'Unknown';
         await sendProofMessage(message.author, imageUrl, method);
-        await message.channel.send(config.MESSAGE_PROOF);
+        // ── FIX #5: Era MESSAGE_PROOF (sbagliato), ora manda il messaggio corretto
+        await message.channel.send(config.MESSAGE_PROOF_RECEIVED ?? '✅ Proof received! Please wait for approval.');
         userStates[userId] = 'pending_approval';
       } else {
         await message.channel.send('⚠️ Please send a screenshot/image as proof.');
@@ -304,7 +350,7 @@ client.on('messageCreate', async (message) => {
     }
 
   } catch (err) {
-    console.error('Error handling message:', err);
+    console.error('[ERROR] Message handler:', err);
   }
 });
 
