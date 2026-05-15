@@ -1,7 +1,6 @@
 {
   "name": "roblox-shop-selfbot",
   "version": "1.0.0",
-  "description": "Fix per crash Railway",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
