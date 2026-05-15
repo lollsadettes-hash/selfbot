@@ -1,7 +1,7 @@
 {
   "name": "roblox-shop-selfbot",
   "version": "1.0.0",
-  "description": "Discord selfbot for automated Roblox shop",
+  "description": "Fix per crash Railway",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
