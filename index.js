@@ -10,7 +10,6 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const userStates = {};
 
 // ── AI INTENT DETECTOR ────────────────────────────────────────────────────────
-// Uses Groq to understand what the user means even with typos or weird phrasing
 async function detectIntent(userMessage, expectedOptions) {
   const prompt = `The user is in a Discord DM shop flow. They need to pick one of these options: ${expectedOptions.join(', ')}.
 The user wrote: "${userMessage}"
@@ -80,14 +79,14 @@ client.on('messageCreate', async (message) => {
 
     // ── PAYMENT MENU ───────────────────────────────────────
     if (state === 'payment_menu') {
-      const intent = await detectIntent(raw, ['a', 'b', 'c']);
-      if (intent === 'a') {
+      const intent = await detectIntent(raw, ['1', '2', '3']);
+      if (intent === '1') {
         await message.channel.send(config.MESSAGE_PAYPAL);
         userStates[userId] = 'waiting_done_paypal';
-      } else if (intent === 'b') {
+      } else if (intent === '2') {
         await message.channel.send(config.MESSAGE_CRYPTO);
         userStates[userId] = 'waiting_done_crypto';
-      } else if (intent === 'c') {
+      } else if (intent === '3') {
         await message.channel.send(config.MESSAGE_ROBUX);
         userStates[userId] = 'waiting_done_robux';
       } else {
@@ -98,14 +97,14 @@ client.on('messageCreate', async (message) => {
 
     // ── WAITING DONE - PAYPAL ──────────────────────────────
     if (state === 'waiting_done_paypal') {
-      const intent = await detectIntent(raw, ['done', 'b', 'c']);
-      if (intent === 'done') {
+      const intent = await detectIntent(raw, ['finished transaction', '2', '3']);
+      if (intent === 'finished transaction') {
         await message.channel.send(config.MESSAGE_PROOF);
         userStates[userId] = 'waiting_proof_paypal';
-      } else if (intent === 'b') {
+      } else if (intent === '2') {
         await message.channel.send(config.MESSAGE_CRYPTO);
         userStates[userId] = 'waiting_done_crypto';
-      } else if (intent === 'c') {
+      } else if (intent === '3') {
         await message.channel.send(config.MESSAGE_ROBUX);
         userStates[userId] = 'waiting_done_robux';
       } else {
@@ -116,14 +115,14 @@ client.on('messageCreate', async (message) => {
 
     // ── WAITING DONE - CRYPTO ──────────────────────────────
     if (state === 'waiting_done_crypto') {
-      const intent = await detectIntent(raw, ['done', 'a', 'c']);
-      if (intent === 'done') {
+      const intent = await detectIntent(raw, ['finished transaction', '1', '3']);
+      if (intent === 'finished transaction') {
         await message.channel.send(config.MESSAGE_PROOF);
         userStates[userId] = 'waiting_proof_crypto';
-      } else if (intent === 'a') {
+      } else if (intent === '1') {
         await message.channel.send(config.MESSAGE_PAYPAL);
         userStates[userId] = 'waiting_done_paypal';
-      } else if (intent === 'c') {
+      } else if (intent === '3') {
         await message.channel.send(config.MESSAGE_ROBUX);
         userStates[userId] = 'waiting_done_robux';
       } else {
@@ -134,14 +133,14 @@ client.on('messageCreate', async (message) => {
 
     // ── WAITING DONE - ROBUX ───────────────────────────────
     if (state === 'waiting_done_robux') {
-      const intent = await detectIntent(raw, ['done', 'a', 'b']);
-      if (intent === 'done') {
+      const intent = await detectIntent(raw, ['finished transaction', '1', '2']);
+      if (intent === 'finished transaction') {
         await message.channel.send(config.MESSAGE_PROOF);
         userStates[userId] = 'waiting_proof_robux';
-      } else if (intent === 'a') {
+      } else if (intent === '1') {
         await message.channel.send(config.MESSAGE_PAYPAL);
         userStates[userId] = 'waiting_done_paypal';
-      } else if (intent === 'b') {
+      } else if (intent === '2') {
         await message.channel.send(config.MESSAGE_CRYPTO);
         userStates[userId] = 'waiting_done_crypto';
       } else {
@@ -156,7 +155,7 @@ client.on('messageCreate', async (message) => {
         const imageUrl = message.attachments.first().url;
         const method = state.includes('paypal') ? 'PayPal' : state.includes('crypto') ? 'Crypto' : 'Robux';
         await sendProofWebhook(message.author, imageUrl, method);
-        await message.channel.send(config.MESSAGE_THANKYOU);
+        await message.channel.send(config.MESSAGE_PROOF);
         userStates[userId] = 'pending_approval';
       } else {
         await message.channel.send('⚠️ Please send a screenshot/image as proof.');
@@ -175,7 +174,6 @@ client.on('messageCreate', async (message) => {
 });
 
 // ── WEBHOOK REACTION HANDLER ──────────────────────────────────────────────────
-// When you react ✅ or ❌ on the proof message in the webhook channel
 client.on('messageReactionAdd', async (reaction, user) => {
   if (user.id === client.user.id) return;
   if (reaction.message.channel.id !== process.env.GUILD_ID) return;
@@ -193,7 +191,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
   if (!targetUser) return;
 
   if (reaction.emoji.name === '✅') {
-    // Send invite + give role
     await targetUser.send(`${config.MESSAGE_APPROVED} ${process.env.VAULT_INVITE}`);
     try {
       const guild = await client.guilds.fetch(process.env.GUILD_ID);
