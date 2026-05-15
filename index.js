@@ -539,6 +539,102 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
+        if (userState.state === STATES.AWAITING_REVIEW) {
+      await channel.send('⏳ La tua prova è in attesa di verifica. Riceverai il vault entro 8-14 ore. Usa !reset solo per annullare.');
+      return;
+    }
+    const optNum = strictInt(content);
+    if (userState.state === STATES.INITIAL) {
+      if (content === '1') {
+        setState(userId, { state: STATES.AWAITING_PAYMENT_METHOD });
+        await channel.send(msgSubMenu());
+        return;
+      }
+      if (content === '2') {
+        setState(userId, { state: STATES.AWAITING_VIDEO_CONFIRM });
+        await channel.send(msgVideoConfirm());
+        return;
+      }
+      if (process.env.GROQ_INTENT === 'true' && process.env.GROQ_API_KEY) {
+        const intent = await classifyIntent(message.content.trim());
+        if (intent === 'choice1') { setState(userId, { state: STATES.AWAITING_PAYMENT_METHOD }); await channel.send(msgSubMenu()); return; }
+        if (intent === 'choice2') { setState(userId, { state: STATES.AWAITING_VIDEO_CONFIRM }); await channel.send(msgVideoConfirm()); return; }
+      }
+      await channel.send('❌ Invia 1 o 2.');
+      return;
+    }
     if (userState.state === STATES.AWAITING_VIDEO_CONFIRM) {
       if (content === '1') {
-        setState(userId, { state: ST
+        setState(userId, { state: STATES.AWAITING_PAYMENT_METHOD });
+        await channel.send(msgSubMenu());
+        return;
+      }
+      if (process.env.GROQ_INTENT === 'true' && process.env.GROQ_API_KEY) {
+        const intent = await classifyIntent(message.content.trim());
+        if (intent === 'choice1') { setState(userId, { state: STATES.AWAITING_PAYMENT_METHOD }); await channel.send(msgSubMenu()); return; }
+      }
+      await channel.send('❌ Scrivi 1 per continuare.');
+      return;
+    }
+    if (userState.state === STATES.AWAITING_PAYMENT_METHOD) {
+      if ([1,2,3].includes(optNum)) {
+        setState(userId, { state: STATES.AWAITING_PAYMENT_CONFIRMATION, paymentMethod: optNum });
+        await channel.send(msgInfoWithConfirm(SUB_INFO[optNum]));
+        return;
+      }
+      if (process.env.GROQ_INTENT === 'true' && process.env.GROQ_API_KEY) {
+        const intent = await classifyIntent(message.content.trim());
+        if (intent === 'payment1') { setState(userId, { state: STATES.AWAITING_PAYMENT_CONFIRMATION, paymentMethod: 1 }); await channel.send(msgInfoWithConfirm(SUB_INFO[1])); return; }
+        if (intent === 'payment2') { setState(userId, { state: STATES.AWAITING_PAYMENT_CONFIRMATION, paymentMethod: 2 }); await channel.send(msgInfoWithConfirm(SUB_INFO[2])); return; }
+        if (intent === 'payment3') { setState(userId, { state: STATES.AWAITING_PAYMENT_CONFIRMATION, paymentMethod: 3 }); await channel.send(msgInfoWithConfirm(SUB_INFO[3])); return; }
+      }
+      await channel.send('❌ Scegli 1 (PayPal), 2 (Crypto) o 3 (Robux).');
+      return;
+    }
+    if (userState.state === STATES.AWAITING_PAYMENT_CONFIRMATION) {
+      if ([1,2,3].includes(optNum)) {
+        setState(userId, { state: STATES.AWAITING_PAYMENT_CONFIRMATION, paymentMethod: optNum });
+        await channel.send(msgInfoWithConfirm(SUB_INFO[optNum]));
+        return;
+      }
+      if (content === 'done' || content === 'finished' || content === 'finished transaction') {
+        await handleCompletion(channel, userId, username, userState.paymentMethod, attachments);
+        return;
+      }
+      if (process.env.GROQ_INTENT === 'true' && process.env.GROQ_API_KEY) {
+        const intent = await classifyIntent(message.content.trim());
+        if (intent.startsWith('change_method_')) {
+          const newMethod = intent.replace('change_method_', '');
+          let newOpt = null;
+          if (newMethod === 'paypal') newOpt = 1;
+          else if (newMethod === 'crypto') newOpt = 2;
+          else if (newMethod === 'robux') newOpt = 3;
+          if (newOpt) {
+            setState(userId, { state: STATES.AWAITING_PAYMENT_CONFIRMATION, paymentMethod: newOpt });
+            await channel.send(msgInfoWithConfirm(SUB_INFO[newOpt]));
+            return;
+          }
+        }
+        if (intent === 'finished') {
+          await handleCompletion(channel, userId, username, userState.paymentMethod, attachments);
+          return;
+        }
+      }
+      await channel.send('❌ Scrivi "finished transaction" con allegato, oppure 1/2/3 per cambiare metodo.');
+      return;
+    }
+  } catch (err) { console.error('❌ Errore messaggio:', errMsg(err)); }
+});
+
+client.on('error', (e) => console.error('Client error:', errMsg(e)));
+process.on('unhandledRejection', (r) => console.error('Unhandled rejection:', errMsg(r)));
+process.on('uncaughtException', (e) => console.error('Uncaught exception:', errMsg(e)));
+process.on('SIGTERM', () => { client.destroy(); process.exit(0); });
+process.on('SIGINT', () => { client.destroy(); process.exit(0); });
+
+const token = process.env.DISCORD_TOKEN;
+if (!token) {
+  console.error('❌ DISCORD_TOKEN mancante');
+  process.exit(1);
+}
+client.login(token).catch(e => { console.error('Login fallito:', errMsg(e)); process.exit(1); });
