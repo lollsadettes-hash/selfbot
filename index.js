@@ -1,178 +1,212 @@
-'use strict';
-
 const { Client } = require('discord.js-selfbot-v13');
-const fetch = require('node-fetch');
-const client = new Client({ checkUpdate: false });
+const axios = require('axios');
+const Groq = require('groq-sdk');
+const config = require('./config');
 
+const client = new Client();
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+// Tracks each user's state in the flow
+const userStates = {};
 
-// ==========================================
-// VARIABILI D'AMBIENTE (RAILWAY)
-// ==========================================
-const TOKEN = process.env.DISCORD_TOKEN;
-const WEBHOOK_URL = process.env.REVIEW_WEBHOOK_URL;
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
+// ── AI INTENT DETECTOR ────────────────────────────────────────────────────────
+// Uses Groq to understand what the user means even with typos or weird phrasing
+async function detectIntent(userMessage, expectedOptions) {
+  const prompt = `The user is in a Discord DM shop flow. They need to pick one of these options: ${expectedOptions.join(', ')}.
+The user wrote: "${userMessage}"
+Reply with ONLY the option they most likely meant (exactly as written in the list), or "unknown" if unclear.`;
 
-const ALLOWED_USERS = process.env.ALLOWED_USERS 
-  ? new Set(process.env.ALLOWED_USERS.split(',').map(id => id.trim())) 
-  : null;
+  const response = await groq.chat.completions.create({
+    model: 'llama3-8b-8192',
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 10,
+    temperature: 0,
+  });
 
-
-
-// ==========================================
-// STATI E CONFIGURAZIONI (FIX LOGS)
-// ==========================================
-const STATES = Object.freeze({
-    INITIAL: 'INITIAL',
-    AWAITING_VIDEO_CONFIRM: 'AWAITING_VIDEO_CONFIRM',
-    AWAITING_PAYMENT_METHOD: 'AWAITING_PAYMENT_METHOD',
-    AWAITING_PAYMENT_CONFIRM: 'AWAITING_PAYMENT_CONFIRM',
-    AWAITING_REVIEW: 'AWAITING_REVIEW',
-});
-
-const userStates = new Map();
-
-const SUB_INFO = {
-    1: "📧 **PayPal**: `lollsadettes02@gmail.com` (Amici e Familiari)\n⚠️ **IMPORTANTE**: Nessuna nota nel pagamento.",
-    2: "🪙 **LTC (Crypto)**: `LfXyPCq5zEEtTLTCnKiZoHiRyyq2qT5Z3Z`",
-    3: "🎮 **Robux**: [Link Gamepass](https://www.roblox.com/catalog/15331422342/0F-4CCESS)"
-};
-
-
-
-// ==========================================
-// FUNZIONI MANCANTI NEI LOG (FIX REFERENCEERROR)
-// ==========================================
-const sendInitialMenu = (channel) => channel.send("👋 **Benvenuto nel sistema OF (Roblox)**\n\n1️⃣ **Buy Access**\n2️⃣ **Info Creators/Video**\n\n*Rispondi con 1 o 2.*");
-
-async function getGroqAI(userInput) {
-    if (!GROQ_API_KEY) return null;
-    try {
-        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: "llama3-8b-8192",
-                messages: [{ role: "user", content: `Rispondi brevemente come un venditore di un gioco Roblox: ${userInput}` }]
-            })
-        });
-        const data = await response.json();
-        return data.choices[0]?.message?.content;
-    } catch (e) { return null; }
+  return response.choices[0]?.message?.content?.trim().toLowerCase() || 'unknown';
 }
 
+// ── WEBHOOK SENDER ────────────────────────────────────────────────────────────
+async function sendProofWebhook(user, imageUrl, paymentMethod) {
+  await axios.post(process.env.REVIEW_WEBHOOK_URL, {
+    embeds: [
+      {
+        title: '📥 New Payment Proof',
+        color: 0xf5a623,
+        fields: [
+          { name: 'User', value: `${user.tag} (${user.id})`, inline: true },
+          { name: 'Method', value: paymentMethod, inline: true },
+        ],
+        image: { url: imageUrl },
+        footer: {
+          text: `React ✅ to approve and give role | React ❌ to decline`,
+        },
+      },
+    ],
+  });
+}
 
-
-// ==========================================
-// LOGICA ACCOUNT UTENTE (SELF-ACTION)
-// ==========================================
-client.on('ready', () => {
-    console.log(`✅ Selfbot loggato su account: ${client.user.tag}`);
-});
-
-
-
+// ── MAIN MESSAGE HANDLER ──────────────────────────────────────────────────────
 client.on('messageCreate', async (message) => {
-    
-    // Whitelist (se impostata)
-    if (ALLOWED_USERS && !ALLOWED_USERS.has(message.author.id)) return;
-    
-    // Il selfbot reagisce SOLO ai messaggi mandati da TE (o dal tuo account)
-    if (message.author.id !== client.user.id) return;
+  if (message.author.id === client.user.id) return;
+  if (message.channel.type !== 'DM') return;
 
-    const content = message.content.trim();
-    const lowContent = content.toLowerCase();
-    const userId = message.author.id;
+  const userId = message.author.id;
+  const raw = message.content.trim();
+  const state = userStates[userId] || 'start';
 
-
-
-    // Comandi universali di avvio/reset
-    if (lowContent === '!reset' || lowContent === '!start' || lowContent === 'hello') {
-        userStates.set(userId, { state: STATES.INITIAL });
-        return sendInitialMenu(message.channel);
+  try {
+    // ── START ──────────────────────────────────────────────
+    if (state === 'start') {
+      await message.channel.send(config.MESSAGE_WELCOME);
+      userStates[userId] = 'main_menu';
+      return;
     }
 
+    // ── MAIN MENU ──────────────────────────────────────────
+    if (state === 'main_menu') {
+      const intent = await detectIntent(raw, ['1', '2']);
+      if (intent === '1') {
+        await message.channel.send(config.MESSAGE_PAYMENT_MENU);
+        userStates[userId] = 'payment_menu';
+      } else if (intent === '2') {
+        await message.channel.send(config.MESSAGE_OPTION_2);
+        userStates[userId] = 'main_menu';
+      } else {
+        await message.channel.send(config.MESSAGE_WELCOME);
+      }
+      return;
+    }
 
+    // ── PAYMENT MENU ───────────────────────────────────────
+    if (state === 'payment_menu') {
+      const intent = await detectIntent(raw, ['a', 'b', 'c']);
+      if (intent === 'a') {
+        await message.channel.send(config.MESSAGE_PAYPAL);
+        userStates[userId] = 'waiting_done_paypal';
+      } else if (intent === 'b') {
+        await message.channel.send(config.MESSAGE_CRYPTO);
+        userStates[userId] = 'waiting_done_crypto';
+      } else if (intent === 'c') {
+        await message.channel.send(config.MESSAGE_ROBUX);
+        userStates[userId] = 'waiting_done_robux';
+      } else {
+        await message.channel.send(config.MESSAGE_PAYMENT_MENU);
+      }
+      return;
+    }
 
-    let current = userStates.get(userId) || { state: STATES.INITIAL };
+    // ── WAITING DONE - PAYPAL ──────────────────────────────
+    if (state === 'waiting_done_paypal') {
+      const intent = await detectIntent(raw, ['done', 'b', 'c']);
+      if (intent === 'done') {
+        await message.channel.send(config.MESSAGE_PROOF);
+        userStates[userId] = 'waiting_proof_paypal';
+      } else if (intent === 'b') {
+        await message.channel.send(config.MESSAGE_CRYPTO);
+        userStates[userId] = 'waiting_done_crypto';
+      } else if (intent === 'c') {
+        await message.channel.send(config.MESSAGE_ROBUX);
+        userStates[userId] = 'waiting_done_robux';
+      } else {
+        await message.channel.send(config.MESSAGE_PAYPAL);
+      }
+      return;
+    }
 
+    // ── WAITING DONE - CRYPTO ──────────────────────────────
+    if (state === 'waiting_done_crypto') {
+      const intent = await detectIntent(raw, ['done', 'a', 'c']);
+      if (intent === 'done') {
+        await message.channel.send(config.MESSAGE_PROOF);
+        userStates[userId] = 'waiting_proof_crypto';
+      } else if (intent === 'a') {
+        await message.channel.send(config.MESSAGE_PAYPAL);
+        userStates[userId] = 'waiting_done_paypal';
+      } else if (intent === 'c') {
+        await message.channel.send(config.MESSAGE_ROBUX);
+        userStates[userId] = 'waiting_done_robux';
+      } else {
+        await message.channel.send(config.MESSAGE_CRYPTO);
+      }
+      return;
+    }
 
+    // ── WAITING DONE - ROBUX ───────────────────────────────
+    if (state === 'waiting_done_robux') {
+      const intent = await detectIntent(raw, ['done', 'a', 'b']);
+      if (intent === 'done') {
+        await message.channel.send(config.MESSAGE_PROOF);
+        userStates[userId] = 'waiting_proof_robux';
+      } else if (intent === 'a') {
+        await message.channel.send(config.MESSAGE_PAYPAL);
+        userStates[userId] = 'waiting_done_paypal';
+      } else if (intent === 'b') {
+        await message.channel.send(config.MESSAGE_CRYPTO);
+        userStates[userId] = 'waiting_done_crypto';
+      } else {
+        await message.channel.send(config.MESSAGE_ROBUX);
+      }
+      return;
+    }
 
-    try {
-        switch (current.state) {
-            
-            case STATES.INITIAL:
-                if (content === '1') {
-                    userStates.set(userId, { state: STATES.AWAITING_PAYMENT_METHOD });
-                    await message.channel.send("💳 **Seleziona metodo**:\n1. PayPal\n2. Crypto (LTC)\n3. Robux");
-                } else if (content === '2') {
-                    userStates.set(userId, { state: STATES.AWAITING_VIDEO_CONFIRM });
-                    await message.channel.send("🎥 **Info**: [LINK_VIDEO]\n\nScrivi **1** per pagare o **!reset**.");
-                } else {
-                    const aiResp = await getGroqAI(content);
-                    if (aiResp) await message.channel.send(aiResp);
-                }
-                break;
+    // ── WAITING PROOF ──────────────────────────────────────
+    if (state.startsWith('waiting_proof')) {
+      if (message.attachments.size > 0) {
+        const imageUrl = message.attachments.first().url;
+        const method = state.includes('paypal') ? 'PayPal' : state.includes('crypto') ? 'Crypto' : 'Robux';
+        await sendProofWebhook(message.author, imageUrl, method);
+        await message.channel.send(config.MESSAGE_THANKYOU);
+        userStates[userId] = 'pending_approval';
+      } else {
+        await message.channel.send('⚠️ Please send a screenshot/image as proof.');
+      }
+      return;
+    }
 
+    // ── PENDING APPROVAL ───────────────────────────────────
+    if (state === 'pending_approval') {
+      await message.channel.send('⏳ Your proof is still under review. Please wait!');
+    }
 
-
-            case STATES.AWAITING_VIDEO_CONFIRM:
-                if (content === '1') {
-                    userStates.set(userId, { state: STATES.AWAITING_PAYMENT_METHOD });
-                    await message.channel.send("💳 **Metodi**:\n1. PayPal\n2. Crypto\n3. Robux");
-                }
-                break;
-
-
-
-            case STATES.AWAITING_PAYMENT_METHOD:
-                const idx = parseInt(content);
-                if ([1, 2, 3].includes(idx)) {
-                    userStates.set(userId, { state: STATES.AWAITING_PAYMENT_CONFIRM, method: idx });
-                    await message.channel.send(`${SUB_INFO[idx]}\n\n✅ Scrivi **"done"** e allega lo screenshot.`);
-                }
-                break;
-
-
-
-            case STATES.AWAITING_PAYMENT_CONFIRM:
-                if (lowContent === 'done' || lowContent === 'finished') {
-                    if (message.attachments.size > 0) {
-                        const proofUrl = message.attachments.first().url;
-                        
-                        if (WEBHOOK_URL) {
-                            await fetch(WEBHOOK_URL, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    embeds: [{
-                                        title: "💰 Nuova Prova Ricevuta",
-                                        description: `User: ${userId}\nMetodo: ${current.method}`,
-                                        image: { url: proofUrl },
-                                        color: 0x00ff00
-                                    }]
-                                })
-                            });
-                        }
-                        userStates.set(userId, { state: STATES.AWAITING_REVIEW });
-                        await message.channel.send("✅ Inviato allo staff! Attendi 8-14 ore.");
-                    } else {
-                        await message.channel.send("❌ Allegare screenshot per confermare!");
-                    }
-                }
-                break;
-
-            case STATES.AWAITING_REVIEW:
-                if (lowContent === 'status') await message.channel.send("⏳ In revisione...");
-                break;
-        }
-    } catch (err) { console.error('Errore esecuzione:', err.message); }
+  } catch (err) {
+    console.error('Error handling message:', err);
+  }
 });
 
+// ── WEBHOOK REACTION HANDLER ──────────────────────────────────────────────────
+// When you react ✅ or ❌ on the proof message in the webhook channel
+client.on('messageReactionAdd', async (reaction, user) => {
+  if (user.id === client.user.id) return;
+  if (reaction.message.channel.id !== process.env.GUILD_ID) return;
 
+  const embed = reaction.message.embeds[0];
+  if (!embed) return;
 
-process.on('SIGTERM', () => { client.destroy(); process.exit(0); });
-process.on('SIGINT', () => { client.destroy(); process.exit(0); });
+  const userField = embed.fields?.find(f => f.name === 'User');
+  if (!userField) return;
 
-client.login(TOKEN).catch(() => console.error("❌ Errore Token!"));
-                          
+  const targetUserId = userField.value.match(/\((\d+)\)/)?.[1];
+  if (!targetUserId) return;
+
+  const targetUser = await client.users.fetch(targetUserId);
+  if (!targetUser) return;
+
+  if (reaction.emoji.name === '✅') {
+    // Send invite + give role
+    await targetUser.send(`${config.MESSAGE_APPROVED} ${process.env.VAULT_INVITE}`);
+    try {
+      const guild = await client.guilds.fetch(process.env.GUILD_ID);
+      const member = await guild.members.fetch(targetUserId);
+      await member.roles.add(process.env.ROLE_ID);
+    } catch (e) {
+      console.error('Could not assign role:', e);
+    }
+    userStates[targetUserId] = 'approved';
+  } else if (reaction.emoji.name === '❌') {
+    await targetUser.send(config.MESSAGE_DECLINED);
+    userStates[targetUserId] = 'start';
+  }
+});
+
+client.login(process.env.DISCORD_TOKEN);
