@@ -17,7 +17,7 @@ The user wrote: "${userMessage}"
 Reply with ONLY the option they most likely meant (exactly as written in the list), or "unknown" if unclear.`;
 
   const response = await groq.chat.completions.create({
-    model: 'llama3-8b-8192',
+    model: 'llama-3.1-8b-instant',
     messages: [{ role: 'user', content: prompt }],
     max_tokens: 10,
     temperature: 0,
