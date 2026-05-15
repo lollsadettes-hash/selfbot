@@ -29,16 +29,6 @@ If nothing matches, reply "unknown".`;
 async function sendProofMessage(user, imageUrl, paymentMethod) {
   const channel = await client.channels.fetch('1504604985663553586');
 
-  const embed = new MessageEmbed()
-    .setTitle('🩷 payment proof received !')
-    .setDescription(`**${user.tag}** is waiting for approval ~`)
-    .setColor(0xff9ec4)
-    .addField('👤 user', `${user.tag}\n\`${user.id}\``, true)
-    .addField('💳 method', paymentMethod, true)
-    .setImage(imageUrl)
-    .setFooter({ text: '💌 review carefully before approving !' })
-    .setTimestamp();
-
   const row = new MessageActionRow().addComponents(
     new MessageButton()
       .setCustomId(`approve_${user.id}`)
@@ -51,8 +41,7 @@ async function sendProofMessage(user, imageUrl, paymentMethod) {
   );
 
   await channel.send({
-    content: '✨ **new payment incoming!!** ✨',
-    embeds: [embed],
+    content: `✨ **new payment incoming!!** ✨\n🩷 **payment proof received !**\n👤 **user:** ${user.tag} \`${user.id}\`\n💳 **method:** ${paymentMethod}\n${imageUrl}`,
     components: [row],
   });
 }
