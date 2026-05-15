@@ -6,32 +6,20 @@ const config = require('./config');
 const client = new Client();
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-// Tracks each user's state AND payment method
 const userStates = {};
 const userPaymentMethod = {};
 
-// ── AI INTENT DETECTOR ────────────────────────────────────────────────────────
-async function detectIntent(userMessage, expectedOptions, context) {
-  const prompt = `You are helping a Discord shop bot understand what a user wants.
-Current step: ${context}
-Available options: ${expectedOptions.join(', ')}
-The user wrote: "${userMessage}"
-
-Match what the user means to one of the available options, even if they use slang, typos, or different phrasing.
-Examples:
-- "go back", "back", "return", "menu", "main menu" → "back"
-- "info", "tell me more", "what is it" → "info"
-- "paypal", "pp", "pay pal", "1" → "paypal"
-- "crypto", "btc", "ltc", "coin", "2" → "crypto"
-- "robux", "roblox", "rbx", "3" → "robux"
-- "done", "finished", "paid", "sent", "finish transaction", "finished transaction", "i paid", "payment done" → "finished transaction"
-
-Reply with ONLY the matching option from the list, or "unknown" if nothing matches.`;
+// ── AI FALLBACK (only for weird/natural language input) ───────────────────────
+async function groqFallback(userMessage, context) {
+  const prompt = `Discord shop bot. Context: ${context}
+User wrote: "${userMessage}"
+Reply with ONLY one word: ${context.includes('main') ? '"buy" or "info"' : context.includes('payment') ? '"paypal", "crypto", "robux", or "back"' : '"finished", "paypal", "crypto", "robux", or "back"'}
+If nothing matches, reply "unknown".`;
 
   const response = await groq.chat.completions.create({
     model: 'llama-3.1-8b-instant',
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 15,
+    max_tokens: 10,
     temperature: 0,
   });
 
@@ -63,9 +51,11 @@ client.on('messageCreate', async (message) => {
 
   const userId = message.author.id;
   const raw = message.content.trim();
+  const msg = raw.toLowerCase();
   const state = userStates[userId] || 'start';
 
   try {
+
     // ── START ──────────────────────────────────────────────
     if (state === 'start') {
       await message.channel.send(config.MESSAGE_WELCOME);
@@ -73,24 +63,34 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // ── MAIN MENU ──────────────────────────────────────────
+    // ── MAIN MENU → 1 = buy, 2 = info ─────────────────────
     if (state === 'main_menu') {
-      const intent = await detectIntent(raw, ['buy', 'info'], 'Main menu: buy permanent access or get info');
-      if (intent === 'buy' || intent === '1') {
+      let intent = null;
+      if (msg === '1') intent = 'buy';
+      else if (msg === '2') intent = 'info';
+      else intent = await groqFallback(raw, 'main menu: 1=buy, 2=info');
+
+      if (intent === 'buy') {
         await message.channel.send(config.MESSAGE_PAYMENT_MENU);
         userStates[userId] = 'payment_menu';
-      } else if (intent === 'info' || intent === '2') {
+      } else if (intent === 'info') {
         await message.channel.send(config.MESSAGE_OPTION_2);
-        userStates[userId] = 'main_menu';
+        // stays on main_menu, user sends 1 to continue
       } else {
         await message.channel.send(config.MESSAGE_WELCOME);
       }
       return;
     }
 
-    // ── PAYMENT MENU ───────────────────────────────────────
+    // ── PAYMENT MENU → 1 = PayPal, 2 = Crypto, 3 = Robux ──
     if (state === 'payment_menu') {
-      const intent = await detectIntent(raw, ['paypal', 'crypto', 'robux', 'back'], 'Choose a payment method: PayPal, Crypto, Robux, or go back to main menu');
+      let intent = null;
+      if (msg === '1') intent = 'paypal';
+      else if (msg === '2') intent = 'crypto';
+      else if (msg === '3') intent = 'robux';
+      else if (msg === 'back' || msg === 'menu') intent = 'back';
+      else intent = await groqFallback(raw, 'payment menu: 1=paypal, 2=crypto, 3=robux, back=main menu');
+
       if (intent === 'paypal') {
         await message.channel.send(config.MESSAGE_PAYPAL);
         userStates[userId] = 'waiting_done';
@@ -112,12 +112,19 @@ client.on('messageCreate', async (message) => {
       return;
     }
 
-    // ── WAITING FOR "finished transaction" ─────────────────
+    // ── WAITING DONE → "finished transaction" or switch method
     if (state === 'waiting_done') {
       const currentMethod = userPaymentMethod[userId];
-      const intent = await detectIntent(raw, ['finished transaction', 'paypal', 'crypto', 'robux', 'back'], `User chose ${currentMethod}. They can confirm payment, switch method, or go back`);
+      let intent = null;
 
-      if (intent === 'finished transaction') {
+      if (msg === 'finished transaction' || msg === 'done' || msg === 'finished') intent = 'finished';
+      else if (msg === '1') intent = 'paypal';
+      else if (msg === '2') intent = 'crypto';
+      else if (msg === '3') intent = 'robux';
+      else if (msg === 'back') intent = 'back';
+      else intent = await groqFallback(raw, `user paid with ${currentMethod}, waiting for "finished transaction" or switch method`);
+
+      if (intent === 'finished') {
         await message.channel.send(config.MESSAGE_PROOF);
         userStates[userId] = 'waiting_proof';
       } else if (intent === 'paypal') {
@@ -133,7 +140,6 @@ client.on('messageCreate', async (message) => {
         await message.channel.send(config.MESSAGE_PAYMENT_MENU);
         userStates[userId] = 'payment_menu';
       } else {
-        // Resend current method instructions
         if (currentMethod === 'PayPal') await message.channel.send(config.MESSAGE_PAYPAL);
         else if (currentMethod === 'Crypto') await message.channel.send(config.MESSAGE_CRYPTO);
         else await message.channel.send(config.MESSAGE_ROBUX);
