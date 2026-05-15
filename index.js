@@ -13,10 +13,65 @@ const pendingApprovals = {};
 
 // ── AI FALLBACK ───────────────────────────────────────────────────────────────
 async function groqFallback(userMessage, context) {
-  const prompt = `Discord shop bot. Context: ${context}
-User wrote: "${userMessage}"
-Reply with ONLY one word: ${context.includes('main') ? '"buy" or "info"' : context.includes('payment') ? '"paypal", "crypto", "robux", or "back"' : '"finished", "paypal", "crypto", "robux", or "back"'}
-If nothing matches, reply "unknown".`;
+  let validOptions = '';
+  let examples = '';
+
+  if (context === 'main') {
+    validOptions = '"buy" or "info"';
+    examples = `
+Examples:
+- "i want to buy" → buy
+- "purchase" → buy
+- "how does it work" → info
+- "what do you sell" → info
+- "tell me more" → info
+- "back to info" → info
+- "actually info" → info
+- "show me info" → info
+- "wait no info" → info
+- "go back to info" → info`;
+  } else if (context === 'payment') {
+    validOptions = '"paypal", "crypto", "robux", or "back"';
+    examples = `
+Examples:
+- "i'll pay with paypal" → paypal
+- "bitcoin" → crypto
+- "ethereum" → crypto
+- "pay with robux" → robux
+- "go back" → back
+- "back to menu" → back
+- "wait no go back" → back
+- "back to main" → back
+- "actually go back" → back
+- "nvm back" → back
+- "return to menu" → back`;
+  } else {
+    validOptions = '"finished", "paypal", "crypto", "robux", or "back"';
+    examples = `
+Examples:
+- "i sent the payment" → finished
+- "done paying" → finished
+- "transaction complete" → finished
+- "paid" → finished
+- "switch to paypal" → paypal
+- "actually crypto" → crypto
+- "change to robux" → robux
+- "go back" → back
+- "back to payment menu" → back
+- "wait no go back" → back
+- "actually go back" → back
+- "nvm back" → back
+- "return" → back`;
+  }
+
+  const prompt = `You are an intent classifier for a Discord shop bot.
+The user is in this context: ${context}.
+Valid intents: ${validOptions}.
+${examples}
+
+User message: "${userMessage}"
+
+Reply with ONLY one word from the valid intents list. If nothing matches, reply "unknown".`;
 
   const response = await groq.chat.completions.create({
     model: 'llama-3.1-8b-instant',
@@ -41,20 +96,16 @@ async function sendProofMessage(user, imageUrl, paymentMethod) {
     `> React with ✅ to approve or ❌ to decline`
   );
 
-  // Selfbot adds reactions to the message
   await msg.react('✅');
   await msg.react('❌');
 
-  // Store the mapping messageId → userId
   pendingApprovals[msg.id] = user.id;
 }
 
 // ── REACTION HANDLER ──────────────────────────────────────────────────────────
 client.on('messageReactionAdd', async (reaction, user) => {
-  // Ignore reactions from the selfbot itself
   if (user.id === client.user.id) return;
 
-  // Check if this is a pending payment message
   const targetId = pendingApprovals[reaction.message.id];
   if (!targetId) return;
 
@@ -70,8 +121,12 @@ client.on('messageReactionAdd', async (reaction, user) => {
 
       try {
         const guild = await client.guilds.fetch(process.env.GUILD_ID);
-        const member = await guild.members.fetch(targetId);
-        await member.roles.add(process.env.ROLE_ID);
+        const member = await guild.members.fetch(targetId).catch(() => null);
+        if (member) {
+          await member.roles.add(process.env.ROLE_ID);
+        }
+        // If the member is not in the guild yet, the role will be
+        // assigned automatically when they join (see guildMemberAdd below).
       } catch (e) {
         console.error('Could not assign role:', e);
       }
@@ -105,6 +160,21 @@ client.on('messageReactionAdd', async (reaction, user) => {
   }
 });
 
+// ── AUTO-ROLE ON GUILD JOIN ───────────────────────────────────────────────────
+// If a user joins the server and was already approved (e.g. bought via DM
+// before entering the vault), instantly assign their role.
+client.on('guildMemberAdd', async (member) => {
+  if (member.guild.id !== process.env.GUILD_ID) return;
+  if (userStates[member.id] !== 'approved') return;
+
+  try {
+    await member.roles.add(process.env.ROLE_ID);
+    console.log(`[guildMemberAdd] Role assigned to ${member.user.tag} (was already approved).`);
+  } catch (e) {
+    console.error(`[guildMemberAdd] Could not assign role to ${member.user.tag}:`, e);
+  }
+});
+
 // ── MAIN MESSAGE HANDLER ──────────────────────────────────────────────────────
 client.on('messageCreate', async (message) => {
   if (message.author.id === client.user.id) return;
@@ -124,9 +194,14 @@ client.on('messageCreate', async (message) => {
 
     if (state === 'main_menu') {
       let intent = null;
+
+      // Hard keywords first
       if (msg === '1') intent = 'buy';
       else if (msg === '2') intent = 'info';
-      else intent = await groqFallback(raw, 'main menu: 1=buy, 2=info');
+      // Natural-language shortcuts before calling AI
+      else if (/\bbuy\b|purchas|order/.test(msg)) intent = 'buy';
+      else if (/\binfo\b|information|details|what.*sell|how.*work|tell me more/.test(msg)) intent = 'info';
+      else intent = await groqFallback(raw, 'main');
 
       if (intent === 'buy') {
         await message.channel.send(config.MESSAGE_PAYMENT_MENU);
@@ -141,11 +216,15 @@ client.on('messageCreate', async (message) => {
 
     if (state === 'payment_menu') {
       let intent = null;
+
       if (msg === '1') intent = 'paypal';
       else if (msg === '2') intent = 'crypto';
       else if (msg === '3') intent = 'robux';
-      else if (msg === 'back' || msg === 'menu') intent = 'back';
-      else intent = await groqFallback(raw, 'payment menu: 1=paypal, 2=crypto, 3=robux, back=main menu');
+      else if (/\bpaypal\b/.test(msg)) intent = 'paypal';
+      else if (/\bcrypto\b|\bbitcoin\b|\beth\b|\bethereum\b|\bltc\b/.test(msg)) intent = 'crypto';
+      else if (/\brobux\b/.test(msg)) intent = 'robux';
+      else if (/\bback\b|\breturn\b|\bmenu\b|\bmain\b/.test(msg)) intent = 'back';
+      else intent = await groqFallback(raw, 'payment');
 
       if (intent === 'paypal') {
         await message.channel.send(config.MESSAGE_PAYPAL);
@@ -172,12 +251,16 @@ client.on('messageCreate', async (message) => {
       const currentMethod = userPaymentMethod[userId];
       let intent = null;
 
-      if (msg === 'finished transaction' || msg === 'done' || msg === 'finished') intent = 'finished';
+      if (['finished transaction', 'done', 'finished', 'paid', 'sent'].includes(msg)) intent = 'finished';
       else if (msg === '1') intent = 'paypal';
       else if (msg === '2') intent = 'crypto';
       else if (msg === '3') intent = 'robux';
-      else if (msg === 'back') intent = 'back';
-      else intent = await groqFallback(raw, `user paid with ${currentMethod}, waiting for "finished transaction" or switch method`);
+      else if (/\bpaypal\b/.test(msg)) intent = 'paypal';
+      else if (/\bcrypto\b|\bbitcoin\b|\beth\b|\bethereum\b|\bltc\b/.test(msg)) intent = 'crypto';
+      else if (/\brobux\b/.test(msg)) intent = 'robux';
+      else if (/\bback\b|\breturn\b|\bchange method\b/.test(msg)) intent = 'back';
+      else if (/\bfinish\b|\bdone\b|\bpaid\b|\bsent\b|\bcomplete\b|\btransaction\b/.test(msg)) intent = 'finished';
+      else intent = await groqFallback(raw, `waiting_done (user paid with ${currentMethod})`);
 
       if (intent === 'finished') {
         await message.channel.send(config.MESSAGE_PROOF);
@@ -195,6 +278,7 @@ client.on('messageCreate', async (message) => {
         await message.channel.send(config.MESSAGE_PAYMENT_MENU);
         userStates[userId] = 'payment_menu';
       } else {
+        // Re-send the current method instructions
         if (currentMethod === 'PayPal') await message.channel.send(config.MESSAGE_PAYPAL);
         else if (currentMethod === 'Crypto') await message.channel.send(config.MESSAGE_CRYPTO);
         else await message.channel.send(config.MESSAGE_ROBUX);
