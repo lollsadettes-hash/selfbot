@@ -42,7 +42,7 @@ module.exports = {
 
 📧 **Email**
 
-> \`lollsadettes02@gmail.com\`
+> \`lollsadettes@gmail.com\`
 
 - __IMPORTANT__
 Send as **Friends & Family — no notes**.
@@ -82,7 +82,7 @@ to use other payment options either send 2 ( crypto info ) or 3 ( Robux info ) !
 > and to use other payment options either send 1 ( PayPal info ) or 2 ( Crypto info ) !`,
 
   // ── PROOF REQUEST ─────────────────────────────────────────
-  MESSAGE_PROOF: `**MAKE SURE TO SEND PROOF OF THE PAYMENT IF YOU HAVEN'T ALREADY!**
+  MESSAGE_PROOF: `**MAKE SURE TO SEND PROOF OF THE PAYMENT __TWICE__ <-- !**
 - ( Right below this message. Proof will be reviewed to check its authentication by staff )
 
 > **Be patient**, the vault will be sent within 8-14 hours ⌚ *!*`,
