@@ -1,16 +1,16 @@
-const { Client, MessageActionRow, MessageButton } = require('discord.js-selfbot-v13');
+const { Client } = require('discord.js-selfbot-v13');
 const Groq = require('groq-sdk');
 const config = require('./config');
 
 // ═══════════════════════════════════════════════════════════════
 // ENV VARS
-//   DISCORD_TOKEN   — token selfbot
-//   GROQ_API_KEY    — chiave Groq
-//   VAULT_INVITE    — link invito da inviare all'utente approvato
-//   GUILD_ID        — ID server per assegnare il ruolo
-//   ROLE_ID         — ID ruolo da assegnare
-//   OWNER_ID        — (opzionale) ID utente a cui mandare le DM di review
-//                     Se assente usa l'account del selfbot stesso
+//   DISCORD_TOKEN   — selfbot user token
+//   GROQ_API_KEY    — Groq API key
+//   VAULT_INVITE    — invite link sent to approved users
+//   GUILD_ID        — server ID for role assignment
+//   ROLE_ID         — role ID to assign after approval
+//   OWNER_ID        — (optional) user ID to receive proof DMs
+//                     defaults to the selfbot account itself
 // ═══════════════════════════════════════════════════════════════
 
 const client = new Client({ checkUpdate: false });
@@ -18,6 +18,9 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const userStates = {};
 const userPaymentMethod = {};
+
+// messageId → userId  (track which user each proof message belongs to)
+const pendingApprovals = {};
 
 // ── AI FALLBACK ───────────────────────────────────────────────
 
@@ -100,8 +103,8 @@ const CONTEXT_CONFIG = {
 };
 
 /**
- * Attempts one Groq classification call with a 6-second timeout.
- * Returns the raw lowercased word or null on failure.
+ * Single Groq classification call with a configurable timeout.
+ * Returns the lowercased word or null on failure.
  */
 async function groqCall(prompt, timeoutMs = 6000) {
   const controller = new AbortController();
@@ -123,7 +126,7 @@ async function groqCall(prompt, timeoutMs = 6000) {
     // Strip any stray punctuation the model might add
     return raw.replace(/[^a-z_]/g, '') || null;
   } catch (e) {
-    if (e.name === 'AbortError') console.warn('[GROQ] Timeout — fallback to unknown');
+    if (e.name === 'AbortError') console.warn('[GROQ] Timeout — falling back to unknown');
     else console.error('[GROQ] API error:', e.message ?? e);
     return null;
   } finally {
@@ -132,7 +135,7 @@ async function groqCall(prompt, timeoutMs = 6000) {
 }
 
 /**
- * Builds a few-shot prompt from the context config.
+ * Builds a few-shot classification prompt from the context config.
  */
 function buildPrompt(userMessage, cfg) {
   const exampleLines = cfg.examples
@@ -148,7 +151,7 @@ function buildPrompt(userMessage, cfg) {
 }
 
 /**
- * Main AI fallback — classifies user intent.
+ * Classifies the user's intent using Groq.
  * Retries once if the first response is not a valid label.
  * Falls back to "unknown" on timeout, API error, or invalid response.
  *
@@ -168,7 +171,7 @@ async function groqFallback(userMessage, context) {
   let result = await groqCall(prompt);
   if (result && valid.has(result)) return result;
 
-  // If invalid label returned, retry once with a stricter reminder
+  // Retry once with a stricter reminder if the label was invalid
   if (result && !valid.has(result)) {
     console.warn(`[GROQ] Invalid label "${result}" — retrying`);
     const retryPrompt =
@@ -183,97 +186,86 @@ async function groqFallback(userMessage, context) {
   return 'unknown';
 }
 
-// ── SEND PROOF TO OWNER DM WITH BUTTONS ───────────────────────
+// ── SEND PROOF TO OWNER DM WITH REACTIONS ────────────────────
 async function sendProofToDM(user, imageUrl, paymentMethod) {
-  // Usa OWNER_ID se definito, altrimenti il selfbot manda un DM a se stesso
   const ownerId = process.env.OWNER_ID ?? client.user.id;
   const owner   = await client.users.fetch(ownerId);
   const dm      = await owner.createDM();
 
-  const row = new MessageActionRow().addComponents(
-    new MessageButton()
-      .setCustomId(`proof_approve_${user.id}`)
-      .setLabel('✅ Approve')
-      .setStyle('SUCCESS'),
-    new MessageButton()
-      .setCustomId(`proof_deny_${user.id}`)
-      .setLabel('❌ Deny')
-      .setStyle('DANGER'),
+  const msg = await dm.send(
+    `💳 **New payment proof received**\n\n` +
+    `👤 **User:** ${user.tag} \`${user.id}\`\n` +
+    `💳 **Method:** ${paymentMethod}\n` +
+    `🖼️ **Proof:** ${imageUrl}\n\n` +
+    `> React with ✅ to approve or ❌ to deny`,
   );
 
-  await dm.send({
-    content:
-      `💳 **Nuova prova di pagamento**\n\n` +
-      `👤 **Utente:** ${user.tag} \`${user.id}\`\n` +
-      `💳 **Metodo:** ${paymentMethod}\n` +
-      `🖼️ **Prova:** ${imageUrl}`,
-    components: [row],
-  });
+  await msg.react('✅');
+  await msg.react('❌');
 
-  console.log(`[PROOF] DM di review inviata all'owner per user ${user.tag} (${user.id})`);
+  pendingApprovals[msg.id] = user.id;
+  console.log(`[PROOF] Review DM sent for user ${user.tag} (${user.id})`);
 }
 
-// ── INTERACTION HANDLER (pulsanti Approve / Deny) ─────────────
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton()) return;
+// ── REACTION HANDLER (✅ Approve / ❌ Deny) ──────────────────
+client.on('messageReactionAdd', async (reaction, user) => {
+  // Ignore reactions added by the bot itself
+  if (user.id === client.user.id) return;
 
-  const id = interaction.customId;
-  if (!id.startsWith('proof_approve_') && !id.startsWith('proof_deny_')) return;
+  const targetId = pendingApprovals[reaction.message.id];
+  if (!targetId) return;
 
-  const isApprove    = id.startsWith('proof_approve_');
-  const targetUserId = id.replace(isApprove ? 'proof_approve_' : 'proof_deny_', '');
-
-  await interaction.deferUpdate().catch(() => {});
+  const emoji = reaction.emoji.name;
+  if (emoji !== '✅' && emoji !== '❌') return;
 
   try {
-    const targetUser = await client.users.fetch(targetUserId);
+    const targetUser = await client.users.fetch(targetId);
 
-    if (isApprove) {
+    if (emoji === '✅') {
       // ── APPROVE ──
       await targetUser.send(`${config.MESSAGE_APPROVED} ${process.env.VAULT_INVITE}`);
 
       try {
         const guild  = await client.guilds.fetch(process.env.GUILD_ID);
-        const member = await guild.members.fetch(targetUserId).catch(() => null);
+        const member = await guild.members.fetch(targetId).catch(() => null);
         if (member) {
           await member.roles.add(process.env.ROLE_ID);
-          console.log(`[APPROVE] Ruolo assegnato a ${targetUser.tag}`);
+          console.log(`[APPROVE] Role assigned to ${targetUser.tag}`);
         }
       } catch (e) {
-        console.error('[APPROVE] Errore assegnazione ruolo:', e);
+        console.error('[APPROVE] Failed to assign role:', e);
       }
 
-      userStates[targetUserId] = 'approved';
-      delete userPaymentMethod[targetUserId];
+      userStates[targetId] = 'approved';
+      delete userPaymentMethod[targetId];
+      delete pendingApprovals[reaction.message.id];
 
-      // Aggiorna il messaggio DM rimuovendo i pulsanti e aggiungendo l'esito
-      await interaction.message.edit({
-        content:
-          interaction.message.content +
-          `\n\n✅ **APPROVATO** — invito inviato a **${targetUser.tag}**`,
-        components: [],
-      }).catch(() => {});
+      await reaction.message.edit(
+        reaction.message.content.split('\n> ')[0] +
+        `\n\n✅ **APPROVED** — invite sent to **${targetUser.tag}**`,
+      ).catch(() => {});
+      await reaction.message.reactions.removeAll().catch(() => {});
 
-      console.log(`[APPROVE] ✅ ${targetUser.tag} (${targetUserId}) approvato`);
+      console.log(`[APPROVE] ✅ ${targetUser.tag} (${targetId})`);
 
     } else {
       // ── DENY ──
       await targetUser.send(config.MESSAGE_DECLINED);
 
-      userStates[targetUserId] = 'start';
-      delete userPaymentMethod[targetUserId];
+      userStates[targetId] = 'start';
+      delete userPaymentMethod[targetId];
+      delete pendingApprovals[reaction.message.id];
 
-      await interaction.message.edit({
-        content:
-          interaction.message.content +
-          `\n\n❌ **RIFIUTATO** — **${targetUser.tag}** è stato notificato`,
-        components: [],
-      }).catch(() => {});
+      await reaction.message.edit(
+        reaction.message.content.split('\n> ')[0] +
+        `\n\n❌ **DENIED** — **${targetUser.tag}** has been notified`,
+      ).catch(() => {});
+      await reaction.message.reactions.removeAll().catch(() => {});
 
-      console.log(`[DENY] ❌ ${targetUser.tag} (${targetUserId}) rifiutato`);
+      console.log(`[DENY] ❌ ${targetUser.tag} (${targetId})`);
     }
   } catch (e) {
-    console.error('[INTERACTION] Errore gestione pulsante:', e);
+    console.error('[REACTION] Error:', e);
   }
 });
 
@@ -284,9 +276,9 @@ client.on('guildMemberAdd', async (member) => {
 
   try {
     await member.roles.add(process.env.ROLE_ID);
-    console.log(`[guildMemberAdd] Ruolo assegnato a ${member.user.tag} (già approvato).`);
+    console.log(`[guildMemberAdd] Role assigned to ${member.user.tag} (already approved).`);
   } catch (e) {
-    console.error(`[guildMemberAdd] Errore assegnazione ruolo a ${member.user.tag}:`, e);
+    console.error(`[guildMemberAdd] Failed to assign role to ${member.user.tag}:`, e);
   }
 });
 
@@ -420,8 +412,8 @@ client.on('messageCreate', async (message) => {
 
 client.on('ready', () => {
   const ownerId = process.env.OWNER_ID ?? client.user.id;
-  console.log(`✅ Connesso come ${client.user.tag}`);
-  console.log(`📬 Review DM → owner ID: ${ownerId}${!process.env.OWNER_ID ? ' (selfbot stesso)' : ''}`);
+  console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`📬 Proof DMs → owner ID: ${ownerId}${!process.env.OWNER_ID ? ' (selfbot itself)' : ''}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
