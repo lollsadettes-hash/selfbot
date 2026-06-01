@@ -24,7 +24,7 @@ module.exports = {
 
 - for only the **PRICE** of 
 > __**6,80**__ 💸 
-> __**700**__ robux
+> __**800**__ robux (due to roblox taxing fees)
 
 > ⚠️ ! Make sure to send one of the three __**numbers**__ to continue `,
 
