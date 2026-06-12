@@ -40,9 +40,9 @@ module.exports = {
 
 - __PayPal Information__
 
-📧 **Email**
+📧 **User**
 
-> \`lollsadettes@gmail.com\`
+> \`@pinkcorset\`
 
 - __IMPORTANT__
 Send as **Friends & Family — no notes**.
