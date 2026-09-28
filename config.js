@@ -31,7 +31,7 @@ module.exports = {
   // ── OPTION 2 (info, then redirects to option 1) ───────────
   MESSAGE_OPTION_2: `For all the **info** on our 0F creators we have :
 
-- **OVER 100+** for you to enjoy & pleasure yourself with forever listed right under this [video](https://media.discordapp.net/attachments/1550262089040265216/1554136057703043172/lv_0_20260928162005.mp4?ex=6abbc97e&is=6aba77fe&hm=38a38b292b57c3863e89ba34cb70025e56117376f6a1c6f10e768c4953b108c9&).
+- **OVER 185+** for you to enjoy & pleasure yourself with forever listed right under this [video](https://media.discordapp.net/attachments/1550262089040265216/1554136057703043172/lv_0_20260928162005.mp4?ex=6abbc97e&is=6aba77fe&hm=38a38b292b57c3863e89ba34cb70025e56117376f6a1c6f10e768c4953b108c9&).
 
 > ⚠️ ! Make sure to send __**1**__ to continue with the payment !`,
 
