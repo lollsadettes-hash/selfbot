@@ -91,6 +91,6 @@ to use other payment options either send 2 ( crypto info ) or 3 ( Robux info ) !
   MESSAGE_APPROVED: `🎉 Payment approved! Here is your invite to the vaulted server:`,
 
   // ── DECLINED ──────────────────────────────────────────────
-  MESSAGE_DECLINED: `❌ Payment not approved. Please contact us for assistance.`,
+  MESSAGE_DECLINED: `❌ Payment not approved. If the payment is outdated renew it.The vault has been upgraded.`,
 
 };
