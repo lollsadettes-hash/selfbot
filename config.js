@@ -74,7 +74,8 @@ to use other payment options either send 2 ( crypto info ) or 3 ( Robux info ) !
 
 📧 **Gamepass**
 
-> [gamepass](https://www.roblox.com/catalog/15331422342/0F-4CCESS)
+> [gamepass](https://www.roblox.com/game-pass/821416308/0F-4CC3SS)
+🚨 ** IF THE GAMEPASS ABOVE SHOWS AS UNAVAILABLE YOU MUST VERIFY YOUR AGE GROUP OR TRY OTHER PAYMENT OPTIONS! **
 
 > ⚠️ ! Make sure to send  ' __**finished transaction**__ ' after sending the money along with the **proof of payment** 
 -# ( screenshot of the money being sent , ss of the transaction)
